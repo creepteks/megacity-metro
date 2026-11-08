@@ -16,10 +16,6 @@ namespace Unity.MegacityMetro
         {
             state.RequireForUpdate<PlayerSpawner>();
 
-            // Client-side optimizations:
-            var ghostSendSystemData = new GhostSendSystemData {MinSendImportance = 2};
-            state.EntityManager.CreateSingleton(ghostSendSystemData);
-            
             RateSettings.ApplyFrameRate();
         }
 

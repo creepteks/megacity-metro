@@ -32,6 +32,10 @@ namespace Unity.MegacityMetro
         {
             Debug.Log($"Initialize NetcodeBootstrap using world '{defaultWorldName}'");
 
+            // Register the project driver constructor before any world is created so the
+            // server gets the enlarged send/receive queues (see MegacityMetroDriverConstructor).
+            NetworkStreamReceiveSystem.DriverConstructor = new MegacityMetroDriverConstructor();
+
             // This style of check should be incorporated into the SDK and extended
             // to included additional use cases (e.g. Relay)..
             var context = PlayModeContext.CheckCompatibility();

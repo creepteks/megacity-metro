@@ -32,21 +32,48 @@ namespace Unity.Services.MultiplayerSDK.Client
             m_Configuration = configuration;
 
             SetupWorlds();
-            SetupDriverConstructor();
 
             switch (m_Configuration.Role)
             {
                 case NetworkRole.Client:
-                    await ConnectAsync();
+                    // Do not connect here: the game connects its own ClientWorld through
+                    // ServerConnectionUtils.ConnectToServer. Only resolve the endpoint so the
+                    // SDK join does not produce a second, immediately discarded connection.
+                    ResolveClientEndpoint();
                     break;
                 case NetworkRole.Host:
+                    SetupDriverConstructor();
                     Listen();
                     await SelfConnectAsync();
                     break;
                 case NetworkRole.Server:
+                    SetupDriverConstructor();
                     Listen();
                     break;
             }
+        }
+
+        void ResolveClientEndpoint()
+        {
+            NetworkEndpoint connectEndpoint = default;
+
+            switch (m_Configuration.Type)
+            {
+                case NetworkType.Direct:
+                    connectEndpoint = m_Configuration.DirectNetworkPublishAddress;
+                    break;
+                case NetworkType.Relay:
+                    connectEndpoint = m_Configuration.RelayClientData.Endpoint;
+                    break;
+            }
+
+            if (!connectEndpoint.IsValid)
+            {
+                throw new Exception("Invalid endpoint to connect to");
+            }
+
+            ConnectionEndpoint = connectEndpoint;
+            UnityEngine.Debug.Log($"Session endpoint resolved: {connectEndpoint}");
         }
 
         public Task StopAsync()

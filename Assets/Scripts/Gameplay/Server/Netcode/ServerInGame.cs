@@ -123,7 +123,11 @@ namespace Unity.MegacityMetro
             clientServerTickRate.SimulationTickRate = clientServerTickRate.NetworkTickRate = RateSettings.tickRate;
             clientServerTickRate.PredictedFixedStepSimulationTickRatio = RateSettings.fixedRateRatio;
             state.EntityManager.CreateSingleton(clientServerTickRate);
-            
+
+            // Server-side optimizations:
+            var ghostSendSystemData = new GhostSendSystemData {MinSendImportance = 2};
+            state.EntityManager.CreateSingleton(ghostSendSystemData);
+
             RateSettings.ApplyFrameRate();
         }
 
