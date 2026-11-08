@@ -33,12 +33,12 @@
 - [AudioMaster](../Assets/Scripts/Gameplay/Client/Audio/MonoBehaviours/AudioMaster.cs)
 
 ### Connectivity
-- [NetcodeBootstrap](../Assets/Scripts/Gameplay/Mix/Netcode/NetcodeBootstrap.cs)
+- [NetcodeBootstrap](../Assets/Scripts/Gameplay/Mix/Multiplayer/Netcode/NetcodeBootstrap.cs)
 
 ### Services (Vivox, Matchmaker, etc.)
 - [VivoxManager](../Assets/Scripts/Gameplay/Client/Vivox/MonoBehaviours/VivoxManager.cs)
 - [ClientMatchmaker](../Assets/Scripts/UGS/Client/ClientMatchmaker.cs)
-- [GameServerManager](../Assets/Scripts/UGS/Server/GameServerManager.cs)
+- [ServerManager](../Assets/Scripts/Gameplay/Mix/Multiplayer/SDK/Server/ServerManager.cs)
 
 ### UI
 - [HUD](../Assets/Scripts/Gameplay/Client/UI/MonoBehaviours/HUD/HUD.cs)
