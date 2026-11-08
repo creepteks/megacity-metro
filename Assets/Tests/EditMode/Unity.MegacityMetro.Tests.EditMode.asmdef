@@ -14,10 +14,10 @@
         "Unity.Transforms",
         "Unity.MegacityMetro.Components",
         "Unity.MegacityMetro.Gameplay.Mix",
-        "Unity.MegacityMetro.Client",
-        "Unity.MegacityMetro.Server",
         "Unity.MegacityMetro.Utils",
-        "Unity.Netcode.Extensions"
+        "Unity.Netcode.Extensions",
+        "Unity.MegacityMetro.Gameplay.Client",
+        "Unity.MegacityMetro.Gameplay.Server"
     ],
     "includePlatforms": [
         "Editor"

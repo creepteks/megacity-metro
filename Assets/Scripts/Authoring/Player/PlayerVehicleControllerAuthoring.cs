@@ -136,7 +136,7 @@ namespace Unity.MegacityMetro.Authoring
                     }
                 }
 
-                using var builder = new BlobBuilder(Allocator.Temp);
+                var builder = new BlobBuilder(Allocator.Temp);
                 ref var root = ref builder.ConstructRoot<FlightProfileTable>();
 
                 if (count == 0)
