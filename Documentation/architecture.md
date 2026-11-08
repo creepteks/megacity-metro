@@ -8,6 +8,7 @@ project is put together at runtime so that the two deep dives make sense:
 - [Gameplay Systems](gameplay-systems.md) – combat, health, visuals, HUD, traffic, pooling, settings.
 - [Source Reference](source-reference.md) – one line per script, grouped by folder.
 - [Known Issues and Pitfalls](known-issues.md) – things found while reading the code that will bite you.
+- [In-House Multiplayer Services](in-house-multiplayer-services.md) – what UGS does for the game today and how to replace it with your own backend.
 
 The existing docs ([assemblies.md](assemblies.md), [attributes.md](attributes.md),
 [multiplayer-setup.md](multiplayer-setup.md), [ugs.md](ugs.md), [gsh.md](gsh.md)) still apply and are referenced

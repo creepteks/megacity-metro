@@ -335,6 +335,9 @@ of the wrap artefact described in [known-issues.md](known-issues.md).
 
 ## 13. Unity Gaming Services integration
 
+For a full inventory of the UGS dependency and a design for replacing it with in-house services, see
+[in-house-multiplayer-services.md](in-house-multiplayer-services.md).
+
 ### 13.1 Client (menu scene)
 
 ```

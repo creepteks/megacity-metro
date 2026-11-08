@@ -14,6 +14,7 @@
 - [Gameplay Systems](Documentation/gameplay-systems.md)
 - [Source Reference](Documentation/source-reference.md)
 - [Known Issues and Pitfalls](Documentation/known-issues.md)
+- [In-House Multiplayer Services (replacing UGS)](Documentation/in-house-multiplayer-services.md)
 - [Gameplay Controls](#gameplay-controls)
   - [Mouse and Keyboard](#mouse-and-keyboard)
 - [Disclaimer](#disclaimer)
