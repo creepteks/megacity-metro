@@ -137,34 +137,41 @@ namespace Unity.MegacityMetro.Authoring
                 }
 
                 var builder = new BlobBuilder(Allocator.Temp);
-                ref var root = ref builder.ConstructRoot<FlightProfileTable>();
+                try
+                {
+                    ref var root = ref builder.ConstructRoot<FlightProfileTable>();
 
-                if (count == 0)
-                {
-                    // Backward compatibility: one profile reproducing the legacy authoring fields exactly.
-                    count = 1;
-                    var profiles = builder.Allocate(ref root.Profiles, 1);
-                    var names = builder.Allocate(ref root.Names, 1);
-                    WriteLegacyProfile(ref profiles[0], authoring);
-                    builder.AllocateString(ref names[0], "Legacy");
-                }
-                else
-                {
-                    var profiles = builder.Allocate(ref root.Profiles, count);
-                    var names = builder.Allocate(ref root.Names, count);
-                    int i = 0;
-                    foreach (var profile in authoring.Profiles)
+                    if (count == 0)
                     {
-                        if (profile == null)
-                            continue;
-                        DependsOn(profile);
-                        profile.WriteTo(ref profiles[i]);
-                        builder.AllocateString(ref names[i], profile.name);
-                        i++;
+                        // Backward compatibility: one profile reproducing the legacy authoring fields exactly.
+                        count = 1;
+                        var profiles = builder.Allocate(ref root.Profiles, 1);
+                        var names = builder.Allocate(ref root.Names, 1);
+                        WriteLegacyProfile(ref profiles[0], authoring);
+                        builder.AllocateString(ref names[0], "Legacy");
                     }
-                }
+                    else
+                    {
+                        var profiles = builder.Allocate(ref root.Profiles, count);
+                        var names = builder.Allocate(ref root.Names, count);
+                        int i = 0;
+                        foreach (var profile in authoring.Profiles)
+                        {
+                            if (profile == null)
+                                continue;
+                            DependsOn(profile);
+                            profile.WriteTo(ref profiles[i]);
+                            builder.AllocateString(ref names[i], profile.name);
+                            i++;
+                        }
+                    }
 
-                return builder.CreateBlobAssetReference<FlightProfileTable>(Allocator.Persistent);
+                    return builder.CreateBlobAssetReference<FlightProfileTable>(Allocator.Persistent);
+                }
+                finally
+                {
+                    builder.Dispose();
+                }
             }
 
             private void WriteLegacyProfile(ref FlightProfileBlob blob, PlayerVehicleControllerAuthoring authoring)

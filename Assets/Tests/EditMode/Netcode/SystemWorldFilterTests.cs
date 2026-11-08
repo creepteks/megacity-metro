@@ -27,9 +27,9 @@ namespace Unity.MegacityMetro.Tests
         {
             Assert.That(ClientSystems, Does.Contain(typeof(TrafficSystem)));
             Assert.That(ClientSystems, Does.Contain(typeof(TrafficSetupSystem)));
-            Assert.That(ServerSystems, Does.Not.Contain(nameof(TrafficSystem)),
+            Assert.That(ServerSystems.Contains(typeof(TrafficSystem)), Is.False,
                 "Traffic is cosmetic and client-only (G1). If this fails, traffic became server-side: re-evaluate the prediction-correction analysis.");
-            Assert.That(ServerSystems, Does.Not.Contain(nameof(TrafficSetupSystem)));
+            Assert.That(ServerSystems.Contains(typeof(TrafficSetupSystem)), Is.False);
         }
 
         [Test]
@@ -48,7 +48,7 @@ namespace Unity.MegacityMetro.Tests
             foreach (var type in new[] { typeof(VehicleHealthAndImmunitySystem), typeof(ShootingServerSystem), typeof(SetPlayerInfoSystem), typeof(SetFlightProfileSystem) })
             {
                 Assert.That(ServerSystems, Does.Contain(type), $"{type.Name} must run on the server");
-                Assert.That(ClientSystems, Does.Not.Contain(nameof(type)), $"{type.Name} is authoritative and must not run on clients");
+                Assert.That(ClientSystems.Contains(type), Is.False, $"{type.Name} is authoritative and must not run on clients");
             }
         }
 
@@ -56,7 +56,7 @@ namespace Unity.MegacityMetro.Tests
         [Ignore("Known open issue N8: RandomShipVisualsSystem has no WorldSystemFilter and instantiates visual prefabs on the server. Remove Ignore when the system is split/filtered.")]
         public void N8_RandomShipVisualsSystem_DoesNotRunOnServer()
         {
-            Assert.That(ServerSystems, Does.Not.Contain(nameof(RandomShipVisualsSystem)));
+            Assert.That(ServerSystems.Contains(typeof(RandomShipVisualsSystem)), Is.False);
             Assert.That(ClientSystems, Does.Contain(typeof(RandomShipVisualsSystem)));
         }
 
