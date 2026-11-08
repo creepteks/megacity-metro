@@ -1,0 +1,37 @@
+{
+    "name": "Unity.MegacityMetro.Tests.EditMode",
+    "rootNamespace": "Unity.MegacityMetro.Tests",
+    "references": [
+        "UnityEngine.TestRunner",
+        "UnityEditor.TestRunner",
+        "Unity.Entities",
+        "Unity.Entities.Hybrid",
+        "Unity.NetCode",
+        "Unity.Networking.Transport",
+        "Unity.Mathematics",
+        "Unity.Collections",
+        "Unity.Physics",
+        "Unity.Transforms",
+        "Unity.MegacityMetro.Components",
+        "Unity.MegacityMetro.Gameplay.Mix",
+        "Unity.MegacityMetro.Client",
+        "Unity.MegacityMetro.Server",
+        "Unity.MegacityMetro.Utils",
+        "Unity.Netcode.Extensions"
+    ],
+    "includePlatforms": [
+        "Editor"
+    ],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": true,
+    "precompiledReferences": [
+        "nunit.framework.dll"
+    ],
+    "autoReferenced": false,
+    "defineConstraints": [
+        "UNITY_INCLUDE_TESTS"
+    ],
+    "versionDefines": [],
+    "noEngineReferences": false
+}

@@ -34,7 +34,7 @@ namespace Unity.MegacityMetro
 
             // Register the project driver constructor before any world is created so the
             // server gets the enlarged send/receive queues (see MegacityMetroDriverConstructor).
-            NetworkStreamReceiveSystem.DriverConstructor = new MegacityMetroDriverConstructor();
+            RegisterDriverConstructor();
 
             // This style of check should be incorporated into the SDK and extended
             // to included additional use cases (e.g. Relay)..
@@ -92,6 +92,17 @@ namespace Unity.MegacityMetro
             }
 #endif
             return true;
+        }
+
+        /// <summary>
+        /// Makes <see cref="MegacityMetroDriverConstructor"/> the constructor for every Netcode world created
+        /// afterwards (known issue N1). Idempotent.
+        /// </summary>
+        public static void RegisterDriverConstructor()
+        {
+            if (NetworkStreamReceiveSystem.DriverConstructor is MegacityMetroDriverConstructor)
+                return;
+            NetworkStreamReceiveSystem.DriverConstructor = new MegacityMetroDriverConstructor();
         }
 
         public static void CheckWorlds()

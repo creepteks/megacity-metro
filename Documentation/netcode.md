@@ -104,7 +104,8 @@ Worlds created by each entry point:
 4. Creates the **importance grid**: `GhostDistanceData { TileSize = (256, 8192, 256), TileCenter = 0, TileBorderWidth = 5 }`
    and `GhostImportance` with `GhostDistanceImportance.ScaleFunctionPointer`, keyed on `GhostConnectionPosition`.
 5. Creates `ClientServerTickRate` with `SimulationTickRate = NetworkTickRate = 30`, `PredictedFixedStepSimulationTickRatio = 1`.
-6. `RateSettings.ApplyFrameRate()`.
+6. Creates `GhostSendSystemData { MinSendImportance = 2 }` (moved here from the client in `8811cef`; see N2/N10 in known-issues).
+7. `RateSettings.ApplyFrameRate()`.
 
 `OnUpdate` for every connection entity that has `NetworkId` but no `NetworkStreamInGame`:
 
@@ -122,7 +123,7 @@ Worlds created by each entry point:
 
 | System | File | What it does |
 |---|---|---|
-| `ClientInGame` (client + thin, Initialization) | `Client/Netcode/ClientInGame.cs` | Registers `MegacityMetroSmoothingAction` for `LocalTransform` on `GhostPredictionSmoothing`; adds `NetworkStreamInGame` + `ConnectionState` to every `NetworkId` connection; creates a `GhostSendSystemData { MinSendImportance = 2 }` singleton (client-side, inert, see known issues); applies frame rate. |
+| `ClientInGame` (client + thin, Initialization) | `Client/Netcode/ClientInGame.cs` | Registers `MegacityMetroSmoothingAction` for `LocalTransform` on `GhostPredictionSmoothing`; adds `NetworkStreamInGame` + `ConnectionState` to every `NetworkId` connection; applies frame rate. |
 | `SendPlayerInfoSystem` (client + thin) | `Client/Player/SetupPlayerInfoSystem.cs` | Once in game, sends the RPC `SetPlayerInfoRequest { Name, UASId, IsClient = !IsThinClient, Platform }` and tags the connection with `NameAssigned`. |
 | `SetPlayerInfoSystem` (server) | `Server/Player/SetPlayerInfoSystem.cs` | Consumes the RPC: finds the ghost whose `GhostOwner.NetworkId` matches the sender, sets `PlayerName` (thin clients get a name from the baked `BotNameElement` bank, real clients get their typed name or a random one), `PlayerPlatform`, adds `PlayerUASID`, appends to `PlayerConnectedElement`, destroys the request. |
 | `MatchMakingMainMenuSystem` (client) | `Client/UI/Systems/MainMenu/MatchMakingMainMenuSystem.cs` | If `MatchMakingConnector.IsTryingToConnect` and the world has no `NetworkStreamConnection`, connects `NetworkStreamDriver` to `IP:Port` manually; reports success/failure to `MainMenu`. |
@@ -157,16 +158,12 @@ Two `INetworkStreamDriverConstructor` implementations exist:
 
 | Class | Registered by | Used when |
 |---|---|---|
-| `CustomDriverConstructor` (`Mix/Multiplayer/SDK/Client/CustomDriverConstructor.cs`) | `CustomEntitiesNetworkHandler.SetupDriverConstructor()` sets `NetworkStreamReceiveSystem.DriverConstructor` when the Multiplayer Services SDK starts a session network | After a client has joined/matchmade a session in this process. Supports Direct and Relay, IPC for host, and raises server UDP queue capacity to `MaxPlayerCount * 5`. |
-| `MegacityMetroDriverConstructor` (`Mix/Multiplayer/Netcode/MegacityMetroDriverConstructor.cs`) | **nothing** (referenced only in a doc comment) | Never. It was the original 150-player queue fix. |
+| `CustomDriverConstructor` (`Mix/Multiplayer/SDK/Client/CustomDriverConstructor.cs`) | `CustomEntitiesNetworkHandler.SetupDriverConstructor()`, now only for the SDK `Host`/`Server` roles (not used by this game) | Effectively never since `8811cef`. Supports Direct and Relay, IPC for host. |
+| `MegacityMetroDriverConstructor` (`Mix/Multiplayer/Netcode/MegacityMetroDriverConstructor.cs`) | `NetCodeBootstrap.RegisterDriverConstructor()` at the start of `Initialize` (since `8811cef`) | Every world in every process. Server UDP queues are `ServerSendReceiveQueueCapacity = 150 * 5`; client driver uses transport defaults. Relay parameters are not applied (Relay is unused). |
 
-Consequence: the dedicated server (which never runs the client SDK handler) uses Netcode's default driver
-constructor and therefore the **default** send/receive queue capacity. If you see Unity Transport "error code 5"
-style warnings under load, register the constructor in `NetCodeBootstrap.Initialize` before creating worlds:
-
-```csharp
-NetworkStreamReceiveSystem.DriverConstructor = new MegacityMetroDriverConstructor();
-```
+History: before `8811cef` the project constructor was never registered and the dedicated server ran with the
+transport's default queue capacity (known issue N1). The registration is guarded by `N1_DriverConstructorTests`.
+Validation under 150-player load is still pending (see netcode-issues-analysis.md §7).
 
 ---
 
@@ -306,10 +303,11 @@ of the wrap artefact described in [known-issues.md](known-issues.md).
   to stop flicker at tile edges. Ships are partitioned into chunks by `GhostDistancePartitionShared`.
 - Per-ghost payload: position (3 × q1000) + 7 floats of movement state + laser/health/score fields. Strings and
   entity references only cost when changed.
-- `GhostSendSystemData { MinSendImportance = 2 }` is created in `ClientInGame` (client world) where
-  `GhostSendSystem` does not run; to actually skip low-importance ghosts, create it in the server world
-  (`ServerInGame.OnCreate`). Other knobs worth considering at 150 players: `DefaultSnapshotPacketSize`,
-  `MaxSendChunks`, `MaxSendEntities`, `IrrelevantImportanceDownScale`.
+- `GhostSendSystemData { MinSendImportance = 2 }` lives in the server world (`ServerInGame.OnCreate`, since
+  `8811cef`): chunks whose accumulated, distance-scaled importance is below 2 are skipped for that snapshot. With
+  the player prefab at `Importance = 10` the far-ship cadence should be measured (known issue N10). Other knobs
+  worth considering at 150 players: `DefaultSnapshotPacketSize`, `MaxSendChunks`, `MaxSendEntities`,
+  `IrrelevantImportanceDownScale`.
 - Bandwidth is bounded by the snapshot packet size, not by player count; far ships simply update less often.
 
 ---
@@ -350,20 +348,21 @@ MatchMakingConnector.Start  (Mix/UI/MonoBehaviours/Matchmaker/MatchMakingConnect
 Find Match:   MatchMakingUI.Matchmake -> MatchMakingConnector.Matchmake
  ├─ ServerConnectionUtils.SetDefaultWorld()        // fresh "ClientWorld"
  ├─ ClientManager.MatchmakeAsync: MultiplayerService.MatchmakeSessionAsync(queue "default", SessionOptions{Type "MegacityMetroSession", MaxPlayers 150}.WithDirectNetwork(...).WithNetworkHandler(CustomEntitiesNetworkHandler))
- │     └─ SDK calls CustomEntitiesNetworkHandler.StartAsync(config): sets DriverConstructor, connects ClientServerBootstrap.ClientWorld to the allocated endpoint, waits ≤10 s for Connected
+ │     └─ SDK calls CustomEntitiesNetworkHandler.StartAsync(config): resolves ConnectionEndpoint only (since 8811cef; it used to connect the client world here)
  ├─ IP/Port = ClientManager.ConnectionEndpoint
  └─ ConnectToServer(ip:port) -> ServerConnectionUtils.RequestConnection -> ConnectToServer:
-       DestroyActiveSimulationWorld (disposes the world the SDK just connected), CreateClientWorld, LoadGame, Connect
+       DestroyActiveSimulationWorld, CreateClientWorld, LoadGame, Connect (the only connection)
 
 Connect (session browser):  SessionBrowser -> MatchMakingConnector.JoinSession(id)
  ├─ SetDefaultWorld(); ClientManager.JoinSessionAsync(id) (JoinSessionOptions{Type "MegacityMetroSession"}, same handler)
- └─ ConnectToServer(endpoint.Address)  // same second-connection pattern
+ └─ ConnectToServer(endpoint.Address)  // same single-connection pattern
 ```
 
-So the gameplay connection is always a **second** connection made by `ServerConnectionUtils`; the SDK-made
-connection is torn down when its world is disposed. The server sees a connect/disconnect pair per joining client
-(and spawns/destroys a ship for the first one). This works but is worth knowing when reading server logs or
-refactoring: the clean fix is to keep the SDK-connected world and load `Main` into it instead of reconnecting.
+Since `8811cef` the SDK handler no longer connects for the `Client` role: `StartAsync` resolves the endpoint into
+`ConnectionEndpoint` and returns, and `RequestConnection` makes the single gameplay connection. Before that fix
+the SDK-made connection was torn down when its world was disposed, so the server saw a connect/disconnect pair per
+join (known issue N3). Side effect of the fix: Relay client parameters are no longer applied anywhere (Relay is
+unused by this game).
 
 Leaving: `MainMenu.Start` on return calls `SetDefaultWorld(true)` and `MatchMakingConnector.ClearSession()`
 (`ClientManager.LeaveSessionAsync` → `Session.LeaveAsync` + `handler.StopAsync` which requests a disconnect).
@@ -462,7 +461,8 @@ too if you want the server to be the source of truth for limits.
 
 ## 16. Netcode-specific pitfalls
 
-Collected with reasoning in [known-issues.md](known-issues.md). Headlines: unused 150-player driver constructor;
-client-side `GhostSendSystemData`; double connection through the SDK; session type mismatch; thin-client input
+Collected with reasoning in [known-issues.md](known-issues.md) and tracked with status, tests and a fix plan in
+[netcode-issues-analysis.md](netcode-issues-analysis.md). Open headlines: session type mismatch; thin-client input
 scale and probability bug; no consumer for `ConnectionStateInfoRequest`; `RandomShipVisualsSystem` running on the
-server; `PlayerUASID` added at runtime and therefore never replicated.
+server; `PlayerUASID` added at runtime and therefore never replicated; ghost importance not re-tuned after the
+`MinSendImportance` move.

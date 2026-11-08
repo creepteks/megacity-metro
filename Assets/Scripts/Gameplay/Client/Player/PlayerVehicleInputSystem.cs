@@ -108,15 +108,9 @@ namespace Unity.MegacityMetro.Gameplay
             float2 lookInput = default; 
             if (math.any(m_AccumulatedMouseDelta != float2.zero) && m_AccumulatedMouseTime > 0f)
             {
-                lookInput = new float2
-                {
-                    x = -m_AccumulatedMouseDelta.y * invertVertical,
-                    y = m_AccumulatedMouseDelta.x * invertHorizontal,
-                };
-
                 float sensitivity = IsTrackpadTouched ? controlSettings.TrackpadSensitivity : 1.0f;
-                lookInput *= controlSettings.MouseSensitivity * sensitivity * mouseScale;
-                lookInput /= m_AccumulatedMouseTime; // displacement accumulated this tick -> velocity
+                lookInput = MouseLookVelocity(m_AccumulatedMouseDelta, m_AccumulatedMouseTime,
+                    invertHorizontal, invertVertical, controlSettings.MouseSensitivity * sensitivity * mouseScale);
             }
             else
             {
@@ -157,8 +151,20 @@ namespace Unity.MegacityMetro.Gameplay
             return (uint) (SystemAPI.Time.ElapsedTime * RateSettings.tickRate);
         }
 
+        /// <summary>
+        /// Converts the mouse displacement accumulated over the frames of one simulation tick into the look
+        /// velocity the command carries (x = pitch, y = yaw). Pure function for tests (known issue F3).
+        /// </summary>
+        internal static float2 MouseLookVelocity(float2 accumulatedDelta, float accumulatedTime, float invertHorizontal, float invertVertical, float sensitivity)
+        {
+            if (accumulatedTime <= 0f)
+                return float2.zero;
+            var look = new float2(-accumulatedDelta.y * invertVertical, accumulatedDelta.x * invertHorizontal);
+            return look * sensitivity / accumulatedTime; // displacement accumulated this tick -> velocity
+        }
+
         /// <summary>Deadzone + response-exponent shaping for a normalized 2D axis (sticks, key composites, touch).</summary>
-        private static float2 ShapeStick(float2 value, float deadzone, float exponent)
+        internal static float2 ShapeStick(float2 value, float deadzone, float exponent)
         {
             float magnitude = math.length(value);
             if (magnitude < 1e-5f || magnitude <= deadzone)

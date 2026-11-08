@@ -81,24 +81,29 @@ namespace Unity.MegacityMetro.Gameplay
             {
                 var input = state.EntityManager.GetComponentData<PlayerVehicleInput>(commandTargetRw.ValueRO.targetEntity);
                 var rand = m_Rand.Value;
-
-                // Movement:
-                input.LookVelocity = (rand.NextFloat2() * 2) - new float2(1);
-
-                // Drive:
-                input.Acceleration = rand.NextInt() < 0.4f ? 0.5f : 0;
-
-                // Roll:
-                input.Roll = rand.NextFloat(-1f, 1f);
-
-                // Shooting:
-                input.Shoot = rand.NextInt() < 0.3f;
-
+                RandomizeInput(ref rand, ref input);
                 m_Rand.Value = rand;
                 state.EntityManager.SetComponentData(commandTargetRw.ValueRO.targetEntity, input);
             }
         }
 
-        
+        /// <summary>
+        /// Produces the bot's next command. Kept as a pure function so tests can check the distribution
+        /// (known issue N6: the probability comparisons and the look-velocity scale are wrong here).
+        /// </summary>
+        internal static void RandomizeInput(ref Random rand, ref PlayerVehicleInput input)
+        {
+            // Movement:
+            input.LookVelocity = (rand.NextFloat2() * 2) - new float2(1);
+
+            // Drive:
+            input.Acceleration = rand.NextInt() < 0.4f ? 0.5f : 0;
+
+            // Roll:
+            input.Roll = rand.NextFloat(-1f, 1f);
+
+            // Shooting:
+            input.Shoot = rand.NextInt() < 0.3f;
+        }
     }
 }

@@ -76,8 +76,7 @@ namespace Unity.MegacityMetro.Gameplay
                 }
 
                 // Handle shooting
-                bool hasEnergyToShoot = laser.Energy > 0 || ownerHealth.IsDead == 0;
-                laser.IsShooting = input.Shoot && hasEnergyToShoot;
+                laser.IsShooting = EvaluateIsShooting(input.Shoot, laser.Energy, ownerHealth.IsDead);
                 if (laser.IsShooting)
                 {
                     // Energy drain when shooting
@@ -92,6 +91,19 @@ namespace Unity.MegacityMetro.Gameplay
         }
     }
     
+    public partial struct LaserJob
+    {
+        /// <summary>
+        /// Whether the laser fires this tick. Pure function for tests (known issue G3: a living ship with zero
+        /// energy still evaluates to true because of the <c>|| IsDead == 0</c> term).
+        /// </summary>
+        internal static bool EvaluateIsShooting(bool shootInput, float energy, byte ownerIsDead)
+        {
+            bool hasEnergyToShoot = energy > 0 || ownerIsDead == 0;
+            return shootInput && hasEnergyToShoot;
+        }
+    }
+
     [BurstCompile]
     public struct AutoAimHitsCollector : ICollector<ColliderCastHit>
     {

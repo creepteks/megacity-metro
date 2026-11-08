@@ -1,5 +1,24 @@
 # Netcode Issues: Impact Analysis and Dependency Graph
 
+## Changelog
+
+The issue statements in sections 1 to 5 are kept as originally written so the reasoning stays whole. This table is
+the current status. "Test" names the EditMode test class in `Assets/Tests/EditMode/Netcode` that guards the item;
+tests for still-open items exist but are marked `[Ignore]` with the issue id, so flipping an item to fixed means
+removing the `Ignore` attribute and watching it pass.
+
+| Date | Issue | Status | Change | Test |
+|---|---|---|---|---|
+| 2026-11-08 | N1 | **Fixed** | Commit `8811cef`: `NetCodeBootstrap.Initialize` registers `MegacityMetroDriverConstructor` before any world is created. Refactored into `NetCodeBootstrap.RegisterDriverConstructor()` (idempotent) for testability. Not yet validated under 150-player load (blocked by N6). | `N1_DriverConstructorTests` (4 passing) |
+| 2026-11-08 | N2 | **Fixed, unvalidated** | Commit `8811cef`: `GhostSendSystemData { MinSendImportance = 2 }` moved from `ClientInGame` to `ServerInGame.OnCreate`. Done without the N10 importance decision the dependency graph asked for; see §7.1. | `N2_GhostSendSettingsTests` (3 passing, creates real worlds) |
+| 2026-11-08 | N3 | **Fixed, with a design note** | Commit `8811cef`: `CustomEntitiesNetworkHandler.StartAsync` no longer connects for `NetworkRole.Client`; it only resolves the endpoint, and the game's own `RequestConnection` makes the single connection. This is the "skip the SDK network handler" option, not the "keep the SDK world" option suggested in §4.2; consequences in §7.1. The N3 → N1 edge is now moot (clients never override the driver constructor). | none (needs the SDK; manual check in §6) |
+| 2026-11-08 | F2 | **Fixed** | Flight profile change set: bank accumulation scaled by `dt * 30`. | covered by flight tests; no direct unit test (job) |
+| 2026-11-08 | F3 | **Fixed** | Flight profile change set: mouse deltas accumulated per simulation tick (`PlayerVehicleInputSystemBase.MouseLookVelocity`). | `F3_InputSamplingTests` (6 passing) |
+| 2026-11-08 | F7 | **Fixed** | Flight profile change set: `VehicleMovementState.Rotation` replicated as an interpolated quaternion and used for all orientation reconstruction. | `F7_MovementStateReplicationTests` (4 passing) |
+| 2026-11-08 | N6 | Open | Unchanged; randomizer extracted to `MoveThinClientInputSystem.RandomizeInput` so the distribution can be asserted. | `N6_ThinClientInputTests` (1 passing, 3 ignored) |
+| 2026-11-08 | N4, N8, N10, N11, N12, N13, G3 | Open | Unchanged. | ignored tests in `N4_SessionTypeTests`, `SystemWorldFilterTests`, `N10_GhostImportanceTests`, `HygieneTests`, `G3_LaserEnergyTests` |
+| 2026-11-08 | N5, N7, N9, N14, G1 | Open | Unchanged. G1's client-only contract is asserted so a silent change is noticed. | `SystemWorldFilterTests.G1_*` (passing); others not unit-testable, see §6 |
+
 Companion to [known-issues.md](known-issues.md). That file lists findings; this one answers two questions about
 them:
 
@@ -289,3 +308,102 @@ Derived from the graph: fix what others depend on first, and batch co-located ed
 - N4 and G3 were not exercised at runtime; the ratings reflect the code as read.
 - Unity Transport's default queue capacity was not inspected in this checkout (no package cache present), so the
   exact player count at which N1 begins to drop packets is not stated.
+
+---
+
+## 6. Test coverage
+
+Location: `Assets/Tests/EditMode/Netcode` (assembly `Unity.MegacityMetro.Tests.EditMode`, EditMode, runs in the
+Test Runner without entering play mode). Three kinds of tests are used:
+
+- **Behaviour tests** on pure functions extracted from the systems (`RandomizeInput`, `EvaluateIsShooting`,
+  `MouseLookVelocity`, `ShapeStick`, `FixSettingsForMegacityMetro`). The extractions are behaviour-preserving.
+- **World tests** that create real Netcode worlds with `ClientServerBootstrap.CreateServerWorld/CreateClientWorld`
+  and inspect singletons created in `OnCreate`. No scene is loaded and the worlds are never updated.
+- **Source/asset contract tests** for things the runtime cannot introspect (session type strings, the prefab's
+  ghost importance, an editor `using`). They read files under `Assets` and fail loudly if a file moves.
+
+| Issue | Test | Kind | State |
+|---|---|---|---|
+| N1 | `N1_DriverConstructorTests` | behaviour | passing |
+| N2 | `N2_GhostSendSettingsTests` | world | passing |
+| N3 | none | – | Manual: join through matchmaking and check the server log shows exactly one `[Server] New connection ID:` per client and no immediate `Connection disconnected`; `ServerInGame` spawn count equals client count. A PlayMode in-process connect test is proposed in §7.3. |
+| N4 | `N4_SessionTypeTests` | source contract | ignored (open) |
+| N5 | none | – | No consumer exists to test; the decision (remove or consume) comes first. |
+| N6 | `N6_ThinClientInputTests` | behaviour | 1 passing, 3 ignored (open) |
+| N7 | none | – | Would need baking the ghost prefab in a test; covered by the fix itself (put the component on the prefab) and by inspecting the entity in the Entities Hierarchy. |
+| N8 | `SystemWorldFilterTests.N8_*` | system filter | ignored (open) |
+| N9 | none | – | Bake-time behaviour; verify by counting `SpawnPoint` components in `MegacityMetroLevelBounds.unity` against `SpawnPointElement` length in the Entities Hierarchy. |
+| N10 | `N10_GhostImportanceTests` | asset contract | 1 passing, 1 ignored (open) |
+| N11, N12 | `HygieneTests` | source contract | ignored (open) |
+| N13 | `SystemWorldFilterTests.N13_*` | reflection on job attributes | ignored (open) |
+| N14 | none | – | CI build check (see §7.2 step 8). |
+| F2 | none | – | `MoveJob` is an `IJobEntity`; scheduling it from a test assembly needs a PlayMode world test (§7.3). |
+| F3 | `F3_InputSamplingTests` | behaviour | passing |
+| F7 | `F7_MovementStateReplicationTests` | reflection + math | passing |
+| G1 | `SystemWorldFilterTests.G1_*` | system filter | passing (asserts the current client-only contract) |
+| G3 | `G3_LaserEnergyTests` | behaviour | 3 passing, 1 ignored (open) |
+
+Additional guards that came for free: `SystemWorldFilterTests` also asserts that movement and shooting run in both
+worlds and that the server-only systems (`VehicleHealthAndImmunitySystem`, `ShootingServerSystem`,
+`SetPlayerInfoSystem`, `SetFlightProfileSystem`) are never created on clients.
+
+---
+
+## 7. Implementation plan for the remaining items
+
+### 7.1 Review of §4.2 against what was committed
+
+Commit `8811cef` executed steps 2 (N1), 3b (N2) and 4b (N3) of the suggested order, skipping step 1 (N6) and step
+3a (N10), and chose a different N3 strategy than the one the graph assumed. Consequences:
+
+1. **N1 and N2 are fixed but unvalidated.** The graph's reason for putting N6 first still holds: with bots that
+   barely turn and fire half the time, a 150-client run does not produce representative change-mask churn, so
+   neither the queue capacity nor the importance threshold has been exercised. The unit tests prove the
+   configuration is applied, not that it is sufficient.
+2. **N2 without N10.** `MinSendImportance = 2` is now an absolute floor on the server while the player ghost's base
+   importance is 10. Netcode accumulates chunk importance over the ticks since the chunk was last sent and then
+   applies the distance scale, so distant ships will still be sent, just less often. That is the intended effect,
+   but the cadence at the far end of the 256-unit tiles has not been measured. Risk: far ships appear to stutter
+   or freeze at the map edges. Mitigation: measure before raising `Importance` (N10) and keep both knobs together.
+3. **N3 strategy.** The fix bypasses the SDK's network handler for clients: `StartAsync` resolves the endpoint and
+   returns, and `ServerConnectionUtils.ConnectToServer` makes the only connection. This removes the phantom
+   connection cleanly and makes the N3 → N1 edge moot (clients never call `SetupDriverConstructor`, so
+   `MegacityMetroDriverConstructor` is the constructor in every process). Two things to be aware of:
+   - Relay sessions can no longer work for clients: `CustomDriverConstructor` was the only place the Relay
+     parameters were applied to the client driver, and it is no longer invoked on the client path. Relay is unused
+     today (dedicated servers only); if it is ever needed, `MegacityMetroDriverConstructor.CreateClientDriver`
+     must learn to read `NetworkConfiguration.RelayClientData`.
+   - The SDK is told the network started without a connection existing. `StopAsync`/`CleanupClient` are no-ops for
+     clients now. If a future Multiplayer Services SDK version verifies connectivity inside `StartAsync`, joins will
+     fail at that point; the in-house design in `in-house-multiplayer-services.md` removes this dependency entirely.
+4. **Order of the rest is unchanged** except that N13's co-located partner F3 is already done, so N13 is now a
+   one-attribute change.
+
+### 7.2 Plan
+
+Each step lists the change, the test to un-ignore, how to validate, and a rough effort. Steps 1 to 4 are
+independent of each other and can be reviewed as separate commits; step 1 should land before any load test.
+
+| # | Item | Change | Test / validation | Effort |
+|---|---|---|---|---|
+| 1 | **N6** thin-client input | In `MoveThinClientInputSystem.RandomizeInput`: `rand.NextFloat() < 0.4f`, `rand.NextFloat() < 0.3f`, `LookVelocity = (rand.NextFloat2() * 2 - 1) * 100f`. Optionally randomize `Strafe` for profiles that use it. | Remove `[Ignore]` from the three `N6_ThinClientInputTests`. Then run 150 thin clients against a server build (`--enable-thin-clients 150 -batchmode`), watch the Netcode stats panel and server log for transport warnings: this is the validation for N1 and N2. | 1 h + a load-test session |
+| 2 | **N10 then re-check N2** | After the load test, decide the player ghost `Importance`. Recommendation: 100 (inside the project's own "High" band), keep `MinSendImportance = 2`, and record the far-ship update cadence from the stats panel before and after. | Remove `[Ignore]` from `N10_GhostImportanceTests.PlayerGhost_ImportanceIsInHighBand` (adjust the band if a different value is chosen). | 2 h + measurement |
+| 3 | **N11 + N4** session plumbing | Delete `UGS/Client/ClientMatchmaker.cs` and the `--max-cars` parsing in `CommandLineConfig`; add `public static class SessionConstants { public const string SessionType = "MegacityMetroSession"; }` in `Mix/Multiplayer` and use it in `ClientManager` and `ServerManager`. | Remove `[Ignore]` from `HygieneTests.N11_*` and `N4_SessionTypeTests` (update the regex to read the shared constant). Manual: one matchmade join and one browser join. | 2 h |
+| 4 | **N13** input job filter | Add `[WithAll(typeof(GhostOwnerIsLocal))]` to `PlayerVehicleInputJob`. Safe in single player because `SpawnSinglePlayer` adds `GhostOwnerIsLocal`. | Remove `[Ignore]` from `SystemWorldFilterTests.N13_*`. Manual: single player and multiplayer both steer. | 30 min |
+| 5 | **G3** laser energy | `LaserJob.EvaluateIsShooting` → `shootInput && energy > 0f && ownerIsDead == 0`; in `DamageJob` also require `laser.Energy > 0f`; decide whether an empty laser must recharge above a threshold before it can fire again (prevents flicker at 0). | Remove `[Ignore]` from `G3_LaserEnergyTests.LivingShipWithoutEnergy_DoesNotShoot`; add a test for the recharge threshold if introduced. Manual: hold fire until empty, confirm no damage and no kill. | 2 h |
+| 6 | **G1** traffic corrections | Decision needed. Option A (recommended now): stop player-vs-traffic contacts on the client by excluding layer 9 `Vehicles` from the traffic colliders' `CollidesWith` (traffic stays cosmetic, no corrections). Option B: simulate traffic deterministically on both sides inside the predicted fixed step from a shared seed (consistent contacts, no replication, but 10k entities on the server). Option C: replicate traffic as ghosts (not viable at this count). | Extend `SystemWorldFilterTests.G1_*` to assert the chosen contract (A: traffic collider filter excludes the vehicle layer, readable from the baked prefab in a world test; B: traffic systems present in both worlds). Manual: fly through a lane at 150 ms simulated latency and watch for corrections. | A: 2 h; B: 2–3 days |
+| 7 | **N8** visuals on server | Split `RandomShipVisualsSystem`: bake `LocalLaserStartPoint` and the FX entity per hull into the `ShipRandomVisuals` buffer element; a `Mix` system that runs everywhere picks the hull index from the name hash and copies `LocalLaserStartPoint` to `VehicleLaser` (the server needs it for the laser origin); a `ClientSimulation|LocalSimulation` system instantiates the visual prefab. | Remove `[Ignore]` from `SystemWorldFilterTests.N8_*`. Manual: laser start point identical on server and client (hit registration unchanged). | 4 h |
+| 8 | **N5, N7, N9** cleanups | N5: delete the `ConnectionStateInfoRequest` sends or add a client system that logs them. N7: put `PlayerUASID` on the prefab (empty) if clients should see it, otherwise drop the `[GhostField]`. N9: give `SpawnPointAuthoring` an explicit `Transform[]` with `DependsOn` instead of `FindObjectsByType`. | N7: reflection test that `PlayerUASID` has no `GhostField` or is baked (choose one). N9: bake-time count check in the Entities Hierarchy. | 3 h |
+| 9 | **N12 + N14** build pipeline | Wrap `using UnityEditor;` in `PlayModeContext.cs` with `#if UNITY_EDITOR`. Add a CI job that builds the Linux dedicated server and a client with `NetCodeClientSettings.ClientTarget = Client` (set via a build script, not by hand). | Remove `[Ignore]` from `HygieneTests.N12_*`. CI green on both builds. | 1 h + CI setup |
+
+### 7.3 Test infrastructure to add next
+
+- **PlayMode in-process connect test**: create server and client worlds, connect over IPC (loopback), load the
+  Player subscene or spawn the ghost prefab directly, and assert one ghost spawns per connection and that
+  `PlayerConnectedElement` has one entry. This covers N3-class regressions and gives F2/MoveJob a host.
+- **MoveJob regression test**: in the PlayMode world above, drive the ship with scripted `PlayerVehicleInput`
+  for N ticks and compare `VehicleMovementState` against recorded traces per flight profile (step 9 of the flight
+  profile plan). This is the right place to assert F2's dt-scaling and the profile models.
+- **Load-test script**: a headless client build launched with `--enable-thin-clients 150` plus a server log parser
+  that counts transport warnings and connection churn, run before and after any change to N1, N2 or N10.
