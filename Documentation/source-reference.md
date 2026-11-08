@@ -54,6 +54,7 @@ One line per script under `Assets/Scripts`, grouped by folder. World column: **C
 | `Components/Gameplay/Player/PlayerScoreAspect.cs` | Aspect over `PlayerScore`, `PlayerPlatform`, `PlayerName`, `GhostOwner` for the leaderboard. |
 | `Components/Gameplay/Player/RootEntity.cs` | Back-reference from a visual child to the ship root. |
 | `Components/Gameplay/Player/SetPlayerInfoRequest.cs` | RPC: `Name`, `UASId`, `IsClient`, `Platform`. |
+| `Components/Gameplay/Player/SetFlightProfileRequest.cs` | RPC: requested flight profile index. |
 | `Components/Gameplay/Player/ShipRandomVisuals.cs` | Buffer of hull prefab entities. |
 | `Components/Gameplay/Player/ShipVisuals.cs` | `FXEntity`, `LocalLaserStartPoint` of a hull. |
 | `Components/Gameplay/Player/Spawner/PlayerSpawner.cs` | `PlayerSpawner { Player, SinglePlayer }`, `SinglePlayer` tag. |
@@ -61,6 +62,8 @@ One line per script under `Assets/Scripts`, grouped by folder. World column: **C
 | `Components/Gameplay/Traffic/CatmullRom.cs` | Spline helper. |
 | `Components/Gameplay/Traffic/TrafficComponents.cs` | `Constants`, `Road`, `VehiclePathing`, `TrafficConfig`, `TrafficEnabled`, `VehiclePrefabRef`, `RoadPoint`, `RoadOffset`. |
 | `Components/Gameplay/Vehicle/AnimationCurveBlob.cs` | Baked 20-sample curve blob with looping `Evaluate` (unused). |
+| `Components/Gameplay/Vehicle/FlightProfile.cs` | `FlightProfile` ScriptableObject + `SteeringModel`/`BankModel` enums: designer-facing flight tuning. |
+| `Components/Gameplay/Vehicle/FlightProfileComponents.cs` | `FlightProfileBlob`, `FlightProfileTable`, `FlightProfileTableRef` (blob on every ship), `FlightProfileRef` (replicated byte index). |
 | `Components/Gameplay/Vehicle/Immunity.cs` | `Duration`, replicated `Counter`, local FX state. |
 | `Components/Gameplay/Vehicle/PlayerLocationBounds.cs` | `IsInside` for the local player. |
 | `Components/Gameplay/Vehicle/PlayerPlatform.cs` | Replicated `RuntimePlatform` int. |
@@ -97,6 +100,7 @@ One line per script under `Assets/Scripts`, grouped by folder. World column: **C
 | `Client/Netcode/MegacityMetroThinInputSystem.cs` | T | Creates thin-client input entity; randomizes input every 30 ticks. |
 | `Client/Netcode/QuitSystem.cs` | C/L | Disconnect request and application quit. |
 | `Client/Player/MonoBehaviours/ShipFXManager.cs` | M | References to VFX graphs and audio sources on a pooled FX prefab. |
+| `Client/Player/FlightProfileRequestSystem.cs` | C/L | Consumes `FlightProfileSelection` requests: RPC in multiplayer, direct write in single player; persists/restores the choice; F1–F4 in dev builds. |
 | `Client/Player/PlayerNameSystem.cs` | C | `InitializePlayerNameTag`, `UpdatePlayerNameTag`. |
 | `Client/Player/PlayerVehicleInputSystem.cs` | C (+L subclass) | **Input sampling**: mouse/keys/gamepad/touch → `PlayerVehicleInput` via `PlayerVehicleInputJob`. |
 | `Client/Player/PluginLoader.cs` | M | Loads the trackpad native plugin; `TouchesCount()`. |
@@ -170,7 +174,8 @@ One line per script under `Assets/Scripts`, grouped by folder. World column: **C
 | `Mix/Player/ApplyVehicleRotationAsVelocitySystem.cs` | C/S/L | `ReconstructVehicleRotationSystem`, `InterpolatedVehicleRotationSystem` (client), `ApplyVehicleRotationAsVelocitySystem`. |
 | `Mix/Player/Jobs/PlayerVehicleCollisionJob.cs` | C/S/L | Throttle cut on contact for tagged bodies (see known issues F1). |
 | `Mix/Player/Jobs/PlayerVehicleInputJob.cs` | C/L | Applies `InvertPitch` and writes `PlayerVehicleInput`. |
-| `Mix/Player/Jobs/PlayerVehicleJobs.cs` | C/S/L | **`MoveJob`** (flight math), rotation jobs, `HealthAndImmunityJob`. |
+| `Mix/Player/FlightProfileSelection.cs` | static | UI/debug entry point to request a flight profile for the local ship. |
+| `Mix/Player/Jobs/PlayerVehicleJobs.cs` | C/S/L | **`MoveJob`** (flight math driven by the active `FlightProfile`), `ApplyFlightProfilePhysicsJob`, rotation jobs, `HealthAndImmunityJob`. |
 | `Mix/Player/MonoBehaviours/PlayerInfoController.cs` | M | Name-tag manager, game mode, Vivox prefab spawn. |
 | `Mix/Player/MonoBehaviours/RandomPositionGenerator.cs` | M | Random positions around a transform (editor/debug helper). |
 | `Mix/Player/PlayerVehicleCollisionSystem.cs` | C/S/L | Schedules the collision job after physics. |
@@ -196,6 +201,7 @@ One line per script under `Assets/Scripts`, grouped by folder. World column: **C
 | `Server/Netcode/PlayerLeftEventSystem.cs` | S (UNITY_SERVER) | Removes the player from the UGS session. |
 | `Server/Netcode/ServerInGame.cs` | S | Tick rate, importance grid, listen, spawn a ghost per connection, update connection positions. |
 | `Server/Netcode/VerifyPlayerDisconnectedSystem.cs` | S | Roster cleanup → `PlayerLeftEvent`. |
+| `Server/Player/SetFlightProfileSystem.cs` | S | Validates `SetFlightProfileRequest` against the baked table and writes `FlightProfileRef` on the sender's ship. |
 | `Server/Player/SetPlayerInfoSystem.cs` | S | Consumes `SetPlayerInfoRequest`: name, platform, UGS id, roster entry. |
 | `Server/Shooting/Jobs/DamageJob.cs` | S | Applies laser damage, score, kills, attacker direction. |
 | `Server/Shooting/ShootingServerSystem.cs` | S | Schedules `DamageJob`. |

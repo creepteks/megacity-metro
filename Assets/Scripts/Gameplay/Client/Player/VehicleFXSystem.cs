@@ -34,6 +34,8 @@ public partial struct VehicleFXSystem : ISystem
         state.EntityManager.CompleteDependencyBeforeRW<LocalToWorld>();
 
         ComponentLookup<DynamicInstanceLinkCleanup> instanceLinkCleanupLookup = SystemAPI.GetComponentLookup<DynamicInstanceLinkCleanup>(true);
+        var profileTableLookup = SystemAPI.GetComponentLookup<FlightProfileTableRef>(true);
+        var profileRefLookup = SystemAPI.GetComponentLookup<FlightProfileRef>(true);
 
         foreach (var (vehicleSettings, moveState, velocity, vehicleHealth, laser, ltw, immunity, entity) in SystemAPI.Query<
                      RefRO<PlayerVehicleSettings>,
@@ -114,7 +116,12 @@ public partial struct VehicleFXSystem : ISystem
                     {
                         if (vehicleHealth.ValueRO.IsDead == 0)
                         {
-                            float speedFactor = math.saturate(math.length(velocity.ValueRO.Linear) / 30f);
+                            float enginePitchMaxSpeed = 30f;
+                            if (profileTableLookup.TryGetComponent(entity, out var profileTable) && profileRefLookup.TryGetComponent(entity, out var profileRef))
+                            {
+                                enginePitchMaxSpeed = math.max(1f, profileTable.GetProfile(profileRef.Index).EnginePitchMaxSpeed);
+                            }
+                            float speedFactor = math.saturate(math.length(velocity.ValueRO.Linear) / enginePitchMaxSpeed);
                             fxManager.SFXCarSound.pitch = math.lerp(1f, 2f, speedFactor);
                         }
                         else

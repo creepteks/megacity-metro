@@ -106,7 +106,9 @@ namespace Unity.MegacityMetro.UI
                 MouseSensitivity = MouseSensitivity,
                 InverseLookHorizontal = InverseLookHorizontal,
                 InverseLookVertical = InverseLookVertical,
-                AimAssistanceSensitivity = AimAssistanceSensitivity
+                AimAssistanceSensitivity = AimAssistanceSensitivity,
+                // Owned by FlightProfileRequestSystem; carry the saved value over.
+                FlightProfileIndex = PersistentDataManager.Instance.GetControlSettings().FlightProfileIndex
             };
 
             PersistentDataManager.Instance.SaveControlSettings(controlSettingsData);

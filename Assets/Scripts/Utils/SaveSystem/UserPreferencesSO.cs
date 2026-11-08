@@ -39,6 +39,8 @@ namespace Unity.MegacityMetro.Utils
         public float AimAssistanceSensitivity;
         public bool InverseLookHorizontal;
         public bool InverseLookVertical;
+        /// <summary>Index into the baked flight profile table (see FlightProfileRequestSystem).</summary>
+        public int FlightProfileIndex;
     }
 
     //[CreateAssetMenu(fileName = "UserPreferences", menuName = "Settings/UserSettings", order = 0)]

@@ -164,8 +164,8 @@ PredictedSimulationSystemGroup                (client predicted + server)
   PredictedFixedStepSimulationSystemGroup
     PhysicsSystemGroup
       BeforePhysicsSystemGroup
-        ReconstructVehicleRotationSystem [OrderFirst]   LocalTransform.Rotation <- VehicleMovementState
-        PlayerVehicleControlSystem (MoveJob)            input -> pitch/yaw/roll, PhysicsVelocity.Linear
+        ReconstructVehicleRotationSystem [OrderFirst]   LocalTransform.Rotation <- VehicleMovementState.Rotation
+        PlayerVehicleControlSystem                      ApplyFlightProfilePhysicsJob (damping) + MoveJob (active FlightProfile -> rotation, PhysicsVelocity.Linear)
         ApplyVehicleRotationAsVelocitySystem [OrderLast] PhysicsVelocity.Angular to reach target rotation
       PhysicsSimulationGroup                            integrate, damping, contacts
       AfterPhysicsSystemGroup
@@ -177,6 +177,8 @@ PredictedSimulationSystemGroup                (client predicted + server)
 SimulationSystemGroup (default position)
   ShootingServerSystem (DamageJob)            (server)   apply damage, kills, score
   SetPlayerInfoSystem                         (server)   consume SetPlayerInfoRequest RPC
+  SetFlightProfileSystem                      (server)   consume SetFlightProfileRequest RPC -> FlightProfileRef
+  FlightProfileRequestSystem                  (client/local) FlightProfileSelection -> RPC or direct write
   VerifyPlayerDisconnectedSystem              (server)   PlayerConnectedElement cleanup -> PlayerLeftEvent
   PlayerLeftEventSystem                       (server, UNITY_SERVER) UGS RemovePlayer
   ConnectionMonitorSystem                     (server)   ConnectionState bookkeeping + info RPCs

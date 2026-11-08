@@ -4,7 +4,6 @@ using Unity.Mathematics;
 using Unity.Physics;
 using Unity.Transforms;
 using Unity.NetCode;
-using UnityEngine;
 using Utils.Misc;
 
 
@@ -30,104 +29,233 @@ namespace Unity.MegacityMetro.Gameplay
         }
     }
 
+    /// <summary>
+    /// Writes the per-profile physics values (linear damping) every tick so a profile switch takes effect
+    /// deterministically on server and predicting client.
+    /// </summary>
+    [BurstCompile]
+    [WithAll(typeof(Simulate))]
+    internal partial struct ApplyFlightProfilePhysicsJob : IJobEntity
+    {
+        public void Execute(in FlightProfileTableRef profileTable, in FlightProfileRef profileRef, ref PhysicsDamping damping)
+        {
+            damping.Linear = profileTable.GetProfile(profileRef.Index).LinearDamping;
+        }
+    }
+
+    /// <summary>
+    /// The flight model. Runs on the server and in owner prediction at the fixed tick (1/30 s).
+    /// Everything it reads is a command, a ghost field or baked data, so rollback is exact.
+    /// See Documentation/flight-control.md for the math and the profile fields.
+    /// </summary>
     [BurstCompile]
     [WithAll(typeof(Simulate))]
     internal partial struct MoveJob : IJobEntity
     {
         public float DeltaTime;
-        const float BaseSteeringSpeedMultiplier = 0.01f;
 
         public void Execute(
             in PlayerVehicleInput controlInput,
-            in PlayerVehicleSettings vehicleSettings,
+            in FlightProfileTableRef profileTable,
+            in FlightProfileRef profileRef,
             ref PhysicsVelocity velocity,
             in VehicleHealth health,
-            ref VehicleMovementState vehicleMovementState)
+            ref VehicleMovementState state)
         {
+            FlightProfileBlob profile = profileTable.GetProfile(profileRef.Index);
+            float dt = DeltaTime;
+
             if (health.IsDead == 1)
             {
-                // Gravity
-                velocity.Linear += -math.up() * 20f * DeltaTime;
+                // Dead: no control, fake gravity (the body has gravity factor 0).
+                velocity.Linear += -math.up() * profile.DeathGravity * dt;
+                return;
             }
-            else
+
+            // Look smoothing (shared by all steering models)
+            float2 look = math.lerp(state.LastLookVelocity, controlInput.LookVelocity,
+                MathUtilities.GetSharpnessInterpolant(profile.LookVelocitySharpness, dt));
+            state.LastLookVelocity = look;
+
+            float rotationSpeed = FlightProfileBlob.BaseSteeringSpeedMultiplier * profile.SteeringSpeed;
+            float maxPitch = math.radians(profile.MaxPitchAngle);
+            float yawSpeed = 0f;          // rad/s, drives banking
+            bool eulerRoll = true;        // false for SixDof where roll is real steering
+            quaternion steeringRotation;  // orientation used for this tick's thrust direction
+
+            switch ((SteeringModel) profile.SteeringModel)
             {
-                // Pitch & Yaw
-                float2 smoothedLookVelocity = math.lerp(vehicleMovementState.LastLookVelocity, controlInput.LookVelocity, MathUtilities.GetSharpnessInterpolant(vehicleSettings.LookVelocitySharpness, DeltaTime));
-                
-                float rotationSpeed = BaseSteeringSpeedMultiplier * vehicleSettings.SteeringSpeed;
-                float maxPitchRadians = math.radians(vehicleSettings.MaxPitchAngle);
-                float yawDelta = (smoothedLookVelocity.y * rotationSpeed * DeltaTime);
-                vehicleMovementState.PitchRadians = math.clamp(vehicleMovementState.PitchRadians + (smoothedLookVelocity.x * rotationSpeed * DeltaTime), -maxPitchRadians, maxPitchRadians);
-                vehicleMovementState.YawRadians = vehicleMovementState.YawRadians + yawDelta;
-                quaternion newRotation = vehicleMovementState.CalculateTargetRotation();
-                float3 forward = math.mul(newRotation, math.forward());
-
-                vehicleMovementState.LastLookVelocity = smoothedLookVelocity;
-                
-                // Acceleration
+                case SteeringModel.SixDof:
                 {
-                    float chosenAcceleration = vehicleSettings.Acceleration;
-                    if (controlInput.Acceleration < 0f)
-                    {
-                        chosenAcceleration = vehicleSettings.Deceleration;
-                    }
-                    velocity.Linear += forward * controlInput.Acceleration * chosenAcceleration * DeltaTime;
+                    eulerRoll = false;
+                    var bodyRates = new float3(
+                        look.x * rotationSpeed,
+                        look.y * rotationSpeed,
+                        -controlInput.Roll * profile.ManualRollSpeed);
+                    quaternion current = state.CalculateTargetRotation();
+                    quaternion delta = quaternion.Euler(bodyRates * dt);
+                    state.Rotation = math.normalize(math.mul(current, delta));
 
-                    float speed = math.length(velocity.Linear);
-                    if (speed > vehicleSettings.MaxSpeed)
+                    // Keep the Euler state readable for HUD/debug and for a later switch back to an Euler model.
+                    float3 euler = MathUtilities.ToEuler(state.Rotation);
+                    state.PitchRadians = euler.x;
+                    state.YawRadians = euler.y;
+                    state.RollRadians = euler.z;
+                    state.BaseRoll = 0f;
+                    state.RollAccumulationFromTurn = 0f;
+                    state.AimPitchRadians = euler.x;
+                    state.AimYawRadians = euler.y;
+
+                    yawSpeed = bodyRates.y;
+                    steeringRotation = state.Rotation;
+                    break;
+                }
+                case SteeringModel.AimPoint:
+                {
+                    // Input moves the aim direction
+                    state.AimPitchRadians = math.clamp(state.AimPitchRadians + look.x * rotationSpeed * dt, -maxPitch, maxPitch);
+                    state.AimYawRadians += look.y * rotationSpeed * dt;
+
+                    // No input: the aim drifts back onto the nose
+                    if (math.lengthsq(controlInput.LookVelocity) < 1e-4f && profile.AimReturnSharpness > 0f)
                     {
-                        velocity.Linear = math.normalizesafe(velocity.Linear) * vehicleSettings.MaxSpeed;
+                        float k = MathUtilities.GetSharpnessInterpolant(profile.AimReturnSharpness, dt);
+                        state.AimPitchRadians = math.lerp(state.AimPitchRadians, state.PitchRadians, k);
+                        state.AimYawRadians = state.YawRadians + math.lerp(WrapPi(state.AimYawRadians - state.YawRadians), 0f, k);
                     }
+
+                    // The nose chases the aim at a limited rate
+                    float maxStep = profile.TurnRateMax * dt;
+                    float pitchStep = math.clamp(state.AimPitchRadians - state.PitchRadians, -maxStep, maxStep);
+                    float yawStep = math.clamp(WrapPi(state.AimYawRadians - state.YawRadians), -maxStep, maxStep);
+                    state.PitchRadians = math.clamp(state.PitchRadians + pitchStep, -maxPitch, maxPitch);
+                    state.YawRadians += yawStep;
+
+                    yawSpeed = dt > 0f ? yawStep / dt : 0f;
+                    steeringRotation = state.CalculateEulerRotation();
+                    break;
+                }
+                default: // SteeringModel.EulerYawPitch (original Megacity behaviour)
+                {
+                    float yawDelta = look.y * rotationSpeed * dt;
+                    state.PitchRadians = math.clamp(state.PitchRadians + look.x * rotationSpeed * dt, -maxPitch, maxPitch);
+                    state.YawRadians += yawDelta;
+
+                    yawSpeed = dt > 0f ? yawDelta / dt : 0f;
+                    steeringRotation = state.CalculateEulerRotation();
+                    break;
+                }
+            }
+
+            // Thrust
+            float3 forward = math.mul(steeringRotation, math.forward());
+            {
+                float chosenAcceleration = controlInput.Acceleration < 0f ? profile.Deceleration : profile.Acceleration;
+                velocity.Linear += forward * controlInput.Acceleration * chosenAcceleration * dt;
+
+                if (profile.StrafeAcceleration > 0f)
+                {
+                    float3 right = math.mul(steeringRotation, math.right());
+                    float3 up = math.mul(steeringRotation, math.up());
+                    float2 strafe = math.clamp(controlInput.Strafe, -1f, 1f);
+                    velocity.Linear += (right * strafe.x + up * strafe.y) * profile.StrafeAcceleration * dt;
                 }
 
-                // Roll
+                float speed = math.length(velocity.Linear);
+
+                // Space-sim / racer feel: rotate the velocity toward the nose
+                if (profile.VelocityAlignSharpness > 0f && speed > 1e-3f)
                 {
-                    // Accumulate roll when turning 
-                    float yawSpeed = 0f;
-                    if (DeltaTime != 0f)
+                    float k = MathUtilities.GetSharpnessInterpolant(profile.VelocityAlignSharpness, dt);
+                    velocity.Linear = math.lerp(velocity.Linear, forward * speed, k);
+                    speed = math.length(velocity.Linear);
+                }
+
+                if (profile.MinSpeed > 0f && speed < profile.MinSpeed)
+                {
+                    float3 direction = speed > 1e-3f ? velocity.Linear / speed : forward;
+                    velocity.Linear = direction * profile.MinSpeed;
+                    speed = profile.MinSpeed;
+                }
+
+                if (speed > profile.MaxSpeed)
+                {
+                    velocity.Linear = math.normalizesafe(velocity.Linear) * profile.MaxSpeed;
+                }
+            }
+
+            if (!eulerRoll)
+                return;
+
+            // Roll and bank (Euler and AimPoint models)
+            {
+                switch ((BankModel) profile.BankModel)
+                {
+                    case BankModel.ProportionalToYawRate:
                     {
-                        yawSpeed = yawDelta / DeltaTime;
+                        float target = math.clamp(yawSpeed * profile.BankGain, -1f, 1f);
+                        state.RollAccumulationFromTurn = math.lerp(state.RollAccumulationFromTurn, target,
+                            MathUtilities.GetSharpnessInterpolant(profile.BankSharpness, dt));
+                        break;
+                    }
+                    case BankModel.None:
+                    {
+                        state.RollAccumulationFromTurn = 0f;
+                        break;
+                    }
+                    default: // BankModel.TurnAccumulation
+                    {
                         if (yawSpeed != 0f)
                         {
-                            quaternion rotationWithoutRoll = vehicleMovementState.CalculateTargetRotationWithoutRoll();
+                            quaternion rotationWithoutRoll = state.CalculateTargetRotationWithoutRoll();
                             float3 velChangeFromTurningDirection = math.mul(rotationWithoutRoll, math.right() * yawSpeed);
-                            float3 newUp = math.mul(newRotation, math.up());
+                            float3 newUp = math.mul(steeringRotation, math.up());
                             float dotUpWithVelChangeDirection = math.dot(math.normalizesafe(velChangeFromTurningDirection), newUp);
 
                             float turnAmount = -(1f - dotUpWithVelChangeDirection) * 0.5f * math.abs(yawSpeed);
                             float turnDirection = yawSpeed < 0f ? 1f : -1f;
-                            vehicleMovementState.RollAccumulationFromTurn = math.clamp(vehicleMovementState.RollAccumulationFromTurn + (turnAmount * turnDirection * vehicleSettings.RollAccumulationSpeed), -1f, 1f);
+                            // Originally a per-tick gain at 30 Hz; scaled by dt so the tick rate can change.
+                            float accumulation = profile.RollAccumulationSpeed * dt * FlightProfileBlob.RollAccumulationReferenceTickRate;
+                            state.RollAccumulationFromTurn = math.clamp(
+                                state.RollAccumulationFromTurn + turnAmount * turnDirection * accumulation, -1f, 1f);
                         }
-                    }
-
-                    // Base roll (from input)
-                    vehicleMovementState.BaseRoll += (-controlInput.Roll * vehicleSettings.ManualRollSpeed * DeltaTime);
-                    if (vehicleMovementState.BaseRoll > math.PI)
-                    {
-                        vehicleMovementState.BaseRoll -= math.PI * 2f;
-                    }
-                    else if (vehicleMovementState.BaseRoll < -math.PI)
-                    {
-                        vehicleMovementState.BaseRoll += math.PI * 2f;
-                    }
-
-                    // Final roll
-                    vehicleMovementState.RollRadians = vehicleMovementState.BaseRoll + math.lerp(0f, math.PI * 0.5f, -vehicleMovementState.RollAccumulationFromTurn);
-
-                    // Restitution of base roll
-                    if (math.abs(controlInput.Roll) < 0.001f)
-                    {
-                        vehicleMovementState.BaseRoll = math.lerp(vehicleMovementState.BaseRoll, 0f, MathUtilities.GetSharpnessInterpolant(vehicleSettings.RollRestitutionSpeed, DeltaTime));
-                    }
-
-                    // Restitution of turning roll
-                    if (vehicleSettings.YawSpeedForMaxRoll != 0f)
-                    {
-                        float finalRollRestitutionSpeed = math.lerp(vehicleSettings.RollRestitutionSpeed, 0f, math.saturate(math.abs(yawSpeed) / vehicleSettings.YawSpeedForMaxRoll));
-                        vehicleMovementState.RollAccumulationFromTurn = math.lerp(vehicleMovementState.RollAccumulationFromTurn, 0f, MathUtilities.GetSharpnessInterpolant(finalRollRestitutionSpeed, DeltaTime));
+                        break;
                     }
                 }
+
+                // Manual roll (from input), wrapped to [-pi, pi]
+                state.BaseRoll = WrapPi(state.BaseRoll + (-controlInput.Roll * profile.ManualRollSpeed * dt));
+
+                // Final roll for this tick
+                state.RollRadians = state.BaseRoll + math.lerp(0f, math.radians(profile.MaxBankAngle), -state.RollAccumulationFromTurn);
+
+                // Restitution of manual roll
+                if (math.abs(controlInput.Roll) < 0.001f)
+                {
+                    state.BaseRoll = math.lerp(state.BaseRoll, 0f, MathUtilities.GetSharpnessInterpolant(profile.RollRestitutionSpeed, dt));
+                }
+
+                // Restitution of turning bank (TurnAccumulation only; Proportional is self-correcting)
+                if ((BankModel) profile.BankModel == BankModel.TurnAccumulation && profile.YawSpeedForMaxRoll != 0f)
+                {
+                    float finalRollRestitutionSpeed = math.lerp(profile.RollRestitutionSpeed, 0f,
+                        math.saturate(math.abs(yawSpeed) / profile.YawSpeedForMaxRoll));
+                    state.RollAccumulationFromTurn = math.lerp(state.RollAccumulationFromTurn, 0f,
+                        MathUtilities.GetSharpnessInterpolant(finalRollRestitutionSpeed, dt));
+                }
+
+                state.Rotation = state.CalculateEulerRotation();
             }
+        }
+
+        /// <summary>Wraps an angle to [-pi, pi].</summary>
+        private static float WrapPi(float angle)
+        {
+            const float twoPi = 2f * math.PI;
+            angle = math.fmod(angle + math.PI, twoPi);
+            if (angle < 0f)
+                angle += twoPi;
+            return angle - math.PI;
         }
     }
 

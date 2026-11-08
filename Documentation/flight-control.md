@@ -307,7 +307,60 @@ push-back or damage: bounds are informational only.
 
 ---
 
-## 8. Plan: making flight customizable (multiple flight styles)
+## 8. Flight profiles (implemented)
+
+The plan below has been implemented. This section documents what exists; the original step list follows for
+the rationale behind each piece.
+
+### What is in the project
+
+| Piece | Where |
+|---|---|
+| Designer asset | `Assets/Scripts/Components/Gameplay/Vehicle/FlightProfile.cs` (`FlightProfile : ScriptableObject`, enums `SteeringModel`, `BankModel`). Create via **Assets ▸ Create ▸ Gameplay ▸ Flight Profile**. |
+| Starter profiles | `Assets/Settings/Gameplay/FlightProfiles/` → `Arcade` (identical to the shipped tuning), `Racer`, `SpaceSim`, `Hover`. |
+| Baked data | `FlightProfileComponents.cs`: `FlightProfileBlob` (one profile), `FlightProfileTable` (blob with `Profiles` + `Names`), `FlightProfileTableRef` (component holding the blob, on every ship), `FlightProfileRef { [GhostField] byte Index }` (the only replicated value). |
+| Baking | `PlayerVehicleControllerAuthoring.Profiles` + `DefaultProfileIndex`. Empty list → one "Legacy" profile built from the old fields and the Rigidbody drag, so untouched prefabs keep flying the same. `VehicleControlMultiplayer.prefab` references the four starter assets (the single-player variant inherits them). |
+| Simulation | `MoveJob` (`Mix/Player/Jobs/PlayerVehicleJobs.cs`) switches on `SteeringModel` and `BankModel` and applies thrust options; `ApplyFlightProfilePhysicsJob` writes `PhysicsDamping.Linear` every tick. |
+| State | `VehicleMovementState.Rotation` (quaternion, replicated and interpolated) is now the authoritative orientation for every model; `AimPitchRadians`/`AimYawRadians` hold the AimPoint target. |
+| Input shaping | `PlayerVehicleInputSystemBase`: per-tick mouse accumulation (fix for F3), per-device scales, stick deadzone and response exponent from the local ship's profile. `PlayerVehicleInput.Strafe` added (no default binding yet). |
+| Camera / feedback | `PlayerCameraTargetUpdater` applies `OverrideCamera` settings and speed-based FOV through `HybridCameraManager.ApplyFlightCamera/SetFieldOfView/ResetFlightCamera`; `VehicleFXSystem` uses `EnginePitchMaxSpeed`. |
+| Switching | `FlightProfileSelection.Request(index)` (static API for UI) → `FlightProfileRequestSystem` (client/local): sends `SetFlightProfileRequest` RPC in multiplayer, writes the component in single player, persists to `ControlSettingsData.FlightProfileIndex` and restores it on spawn. Dev builds: **F1–F4** select profiles 0–3. Server: `SetFlightProfileSystem` validates the index against the table and writes `FlightProfileRef` on the sender's ship. |
+
+### Profile fields
+
+| Group | Field | Effect |
+|---|---|---|
+| Steering | `SteeringModel` | `EulerYawPitch` (original), `SixDof` (quaternion integration, roll steers, no pitch limit), `AimPoint` (look moves an aim direction; nose chases it at `TurnRateMax`, aim returns to nose at `AimReturnSharpness`). |
+| | `SteeringSpeed`, `LookVelocitySharpness`, `MaxPitchAngle` | As in §4.1. |
+| Thrust | `Acceleration`, `Deceleration`, `MaxSpeed` | As in §4.1. |
+| | `MinSpeed` | Speed floor for always-moving styles. |
+| | `LinearDamping` | Replaces the Rigidbody drag; written to `PhysicsDamping` each tick. |
+| | `VelocityAlignSharpness` | 0 = free velocity (drift); higher rotates velocity toward the nose (racer/space-sim). |
+| | `StrafeAcceleration` | Lateral/vertical thrust from `PlayerVehicleInput.Strafe`. |
+| | `DeathGravity` | Fall acceleration while dead (was hard-coded 20). |
+| Roll | `BankModel` | `TurnAccumulation` (original, now dt-scaled), `ProportionalToYawRate` (`bank = clamp(yawRate * BankGain)` followed at `BankSharpness`), `None`. |
+| | `RollAccumulationSpeed`, `ManualRollSpeed`, `RollRestitutionSpeed`, `YawSpeedForMaxRoll` | As in §4.1. |
+| | `MaxBankAngle` | Was hard-coded 90°. |
+| Input | `MouseLookScale`, `StickLookScale`, `TouchLookScale`, `StickDeadzone`, `StickResponseExponent` | Per-device gain, deadzone and response curve (exponent 1 = linear). |
+| Camera | `OverrideCamera`, `FollowDistance`, `FollowSharpness`, `LookAtSharpness`, `CameraVerticalOffset`, `FovAtRest`, `FovAtMaxSpeed` | Applied only when `OverrideCamera` is on; otherwise the camera prefab values are restored. |
+| Feedback | `EnginePitchMaxSpeed` | Speed at which the engine sound reaches maximum pitch (was 30). |
+
+### Determinism and netcode notes
+
+- `MoveJob` reads only commands, ghost fields and the baked table, so prediction rollback stays exact. The table
+  is identical on server and clients because it is baked into the same prefab; the profile index is the only
+  replicated value (one byte).
+- Switching is server-authoritative. The owner's `FlightProfileRef` is a ghost field on a predicted ghost, so a
+  client cannot write it directly in multiplayer (it would be rolled back); it goes through the RPC. The new
+  profile takes effect on the next predicted tick after the snapshot arrives.
+- `Rotation` is replicated as a quaternion, which removes the roll-wrap spin on remote ships (known issue F7).
+- Adding a field: add it to `FlightProfile`, `FlightProfileBlob`, `FlightProfile.WriteTo` and the legacy writer
+  in the baker; bump the baker's `BakingVersion`.
+- Not yet done: a settings-menu control that calls `FlightProfileSelection.Request` (F1–F4 only in dev builds),
+  input bindings for `Strafe`, and the debug overlay / scripted thin-client traces from step 9.
+
+### Original plan (kept for rationale)
+
 
 Goal: ship several selectable "flight styles" (for example *Arcade drift* = today's model, *Space sim* with
 velocity-aligned nose, *Racer* with speed floor and strong auto-bank, *Hover* with strafe), switchable per ship

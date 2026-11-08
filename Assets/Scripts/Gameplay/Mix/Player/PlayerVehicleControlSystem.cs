@@ -1,4 +1,4 @@
-﻿using Unity.Burst;
+using Unity.Burst;
 using Unity.Entities;
 using Unity.NetCode;
 using Unity.Physics.Systems;
@@ -16,6 +16,8 @@ namespace Unity.MegacityMetro.Gameplay
         public void OnUpdate(ref SystemState state)
         {
             var deltaTime = SystemAPI.Time.DeltaTime;
+            // Per-profile physics values first, so the physics step after this group uses this tick's profile.
+            state.Dependency = new ApplyFlightProfilePhysicsJob().ScheduleParallel(state.Dependency);
             var moveJob = new MoveJob {DeltaTime = deltaTime};
             state.Dependency = moveJob.ScheduleParallel(state.Dependency);
         }

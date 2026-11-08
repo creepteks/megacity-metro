@@ -80,6 +80,12 @@ MonoBehaviour:
   AutoAimMinRadius: 4
   LaserRange: 150
   ImmunityDuration: 4.5
+  Profiles:
+  - {fileID: 11400000, guid: a08b4d9f7c1e4f2a4b3c5d6e7f8a9b08, type: 2}
+  - {fileID: 11400000, guid: b19c5e0a8d2f4a3b5c4d6e7f8a9b0c09, type: 2}
+  - {fileID: 11400000, guid: c2ad6f1b9e3a4b4c6d5e7f8a9b0c1d0a, type: 2}
+  - {fileID: 11400000, guid: d3be7a2c0f4b4c5d7e6f8a9b0c1d2e0b, type: 2}
+  DefaultProfileIndex: 0
 --- !u!114 &2368080179726341963
 MonoBehaviour:
   m_ObjectHideFlags: 0

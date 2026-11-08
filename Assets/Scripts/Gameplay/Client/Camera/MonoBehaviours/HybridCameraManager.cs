@@ -25,6 +25,13 @@ namespace Unity.MegacityMetro.CameraManagement
         [NonSerialized]
         public bool WasInitialized;
 
+        // Prefab values, restored when the active flight profile does not override the camera
+        private float _defaultFollowDistance;
+        private float _defaultFollowSharpness;
+        private float _defaultLookAtSharpness;
+        private float _defaultFieldOfView;
+        private bool _flightCameraOverridden;
+
         public static HybridCameraManager Instance;
 
         private void Awake()
@@ -37,7 +44,38 @@ namespace Unity.MegacityMetro.CameraManagement
             {
                 Instance = this;
                 _camera = CameraObject.GetComponent<Camera>();
+                _defaultFollowDistance = FollowDistance;
+                _defaultFollowSharpness = FollowSharpness;
+                _defaultLookAtSharpness = LookAtSharpness;
+                _defaultFieldOfView = _camera != null ? _camera.fieldOfView : 60f;
             }
+        }
+
+        /// <summary>Applies a flight profile's camera settings (see FlightProfile.OverrideCamera).</summary>
+        public void ApplyFlightCamera(float followDistance, float followSharpness, float lookAtSharpness)
+        {
+            FollowDistance = followDistance;
+            FollowSharpness = followSharpness;
+            LookAtSharpness = lookAtSharpness;
+            _flightCameraOverridden = true;
+        }
+
+        public void SetFieldOfView(float fieldOfView)
+        {
+            if (_camera != null)
+                _camera.fieldOfView = fieldOfView;
+        }
+
+        /// <summary>Restores the prefab camera values after a profile override.</summary>
+        public void ResetFlightCamera()
+        {
+            if (!_flightCameraOverridden)
+                return;
+            FollowDistance = _defaultFollowDistance;
+            FollowSharpness = _defaultFollowSharpness;
+            LookAtSharpness = _defaultLookAtSharpness;
+            SetFieldOfView(_defaultFieldOfView);
+            _flightCameraOverridden = false;
         }
 
         public void Reset()

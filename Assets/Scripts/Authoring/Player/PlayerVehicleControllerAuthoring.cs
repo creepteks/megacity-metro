@@ -1,3 +1,4 @@
+using Unity.Collections;
 using Unity.Entities;
 using Unity.Mathematics;
 using Unity.MegacityMetro.Gameplay;
@@ -11,12 +12,18 @@ namespace Unity.MegacityMetro.Authoring
     /// </summary>
     public class PlayerVehicleControllerAuthoring : MonoBehaviour
     {
-        [Header("Speed")]
+        [Header("Flight profiles")]
+        [Tooltip("Selectable flight styles, baked into a blob table on the vehicle. Leave empty to build a single profile from the legacy fields below.")]
+        public FlightProfile[] Profiles;
+        [Tooltip("Index into Profiles used when the ship spawns.")]
+        public int DefaultProfileIndex = 0;
+
+        [Header("Legacy speed (used only when Profiles is empty)")]
         public float Acceleration = 5.0f;
         public float Deceleration = 10.0f;
         public float MaxSpeed = 50f;
 
-        [Header("Rotation")]
+        [Header("Legacy rotation (used only when Profiles is empty)")]
         public float SteeringSpeed = 5.0f;
         public float LookVelocitySharpness = 10.0f;
         public bool InvertPitch;
@@ -26,7 +33,7 @@ namespace Unity.MegacityMetro.Authoring
         public float RollRestitutionSpeed = 2f;
         public float YawSpeedForMaxRoll = 1.8f;
 
-        [Header("Camera")]
+        [Header("Camera (legacy, unused)")]
         public float TargetFollowDamping = 2.0f;
         public float TargetSqLerpThreshold = 2500;
 
@@ -44,7 +51,7 @@ namespace Unity.MegacityMetro.Authoring
         [Header("Immunity")]
         public float ImmunityDuration = 6.0f;
 
-        [BakingVersion("megacity-metro", 5)]
+        [BakingVersion("megacity-metro", 6)]
         public class PlayerVehicleControllerBaker : Baker<PlayerVehicleControllerAuthoring>
         {
             public override void Bake(PlayerVehicleControllerAuthoring authoring)
@@ -82,7 +89,7 @@ namespace Unity.MegacityMetro.Authoring
                 };
                 AddComponent(entity, input);
 
-                // Add vehicle settings component
+                // Legacy settings component: still carries InvertPitch (input job) and VehicleFX (visuals system).
                 var settings = new PlayerVehicleSettings
                 {
                     Acceleration = authoring.Acceleration,
@@ -103,9 +110,106 @@ namespace Unity.MegacityMetro.Authoring
                 };
                 AddComponent(entity, settings);
 
+                // Flight profile table + selector
+                var table = BuildProfileTable(authoring, out var profileCount);
+                AddBlobAsset(ref table, out _);
+                AddComponent(entity, new FlightProfileTableRef { Table = table });
+                AddComponent(entity, new FlightProfileRef
+                {
+                    Index = (byte) math.clamp(authoring.DefaultProfileIndex, 0, profileCount - 1)
+                });
+
                 VehicleMovementState vehicleState = new VehicleMovementState();
                 VehicleMovementState.SetRotation(ref vehicleState, authoring.transform.rotation);
                 AddComponent(entity, vehicleState);
+            }
+
+            private BlobAssetReference<FlightProfileTable> BuildProfileTable(PlayerVehicleControllerAuthoring authoring, out int count)
+            {
+                count = 0;
+                if (authoring.Profiles != null)
+                {
+                    foreach (var profile in authoring.Profiles)
+                    {
+                        if (profile != null)
+                            count++;
+                    }
+                }
+
+                using var builder = new BlobBuilder(Allocator.Temp);
+                ref var root = ref builder.ConstructRoot<FlightProfileTable>();
+
+                if (count == 0)
+                {
+                    // Backward compatibility: one profile reproducing the legacy authoring fields exactly.
+                    count = 1;
+                    var profiles = builder.Allocate(ref root.Profiles, 1);
+                    var names = builder.Allocate(ref root.Names, 1);
+                    WriteLegacyProfile(ref profiles[0], authoring);
+                    builder.AllocateString(ref names[0], "Legacy");
+                }
+                else
+                {
+                    var profiles = builder.Allocate(ref root.Profiles, count);
+                    var names = builder.Allocate(ref root.Names, count);
+                    int i = 0;
+                    foreach (var profile in authoring.Profiles)
+                    {
+                        if (profile == null)
+                            continue;
+                        DependsOn(profile);
+                        profile.WriteTo(ref profiles[i]);
+                        builder.AllocateString(ref names[i], profile.name);
+                        i++;
+                    }
+                }
+
+                return builder.CreateBlobAssetReference<FlightProfileTable>(Allocator.Persistent);
+            }
+
+            private void WriteLegacyProfile(ref FlightProfileBlob blob, PlayerVehicleControllerAuthoring authoring)
+            {
+                var body = GetComponent<Rigidbody>();
+
+                blob.SteeringModel = (byte) SteeringModel.EulerYawPitch;
+                blob.SteeringSpeed = authoring.SteeringSpeed;
+                blob.LookVelocitySharpness = authoring.LookVelocitySharpness;
+                blob.MaxPitchAngle = authoring.MaxPitchAngle;
+                blob.TurnRateMax = 2f;
+                blob.AimReturnSharpness = 2f;
+
+                blob.Acceleration = authoring.Acceleration;
+                blob.Deceleration = authoring.Deceleration;
+                blob.MaxSpeed = authoring.MaxSpeed;
+                blob.MinSpeed = 0f;
+                blob.LinearDamping = body != null ? body.linearDamping : 1f;
+                blob.VelocityAlignSharpness = 0f;
+                blob.StrafeAcceleration = 0f;
+                blob.DeathGravity = 20f;
+
+                blob.BankModel = (byte) BankModel.TurnAccumulation;
+                blob.RollAccumulationSpeed = authoring.RollAccumulationSpeed;
+                blob.BankGain = 0.6f;
+                blob.BankSharpness = 4f;
+                blob.ManualRollSpeed = authoring.ManualRollSpeed;
+                blob.RollRestitutionSpeed = authoring.RollRestitutionSpeed;
+                blob.YawSpeedForMaxRoll = authoring.YawSpeedForMaxRoll;
+                blob.MaxBankAngle = 90f;
+
+                blob.MouseLookScale = 1f;
+                blob.StickLookScale = 1f;
+                blob.TouchLookScale = 1f;
+                blob.StickDeadzone = 0f;
+                blob.StickResponseExponent = 1f;
+
+                blob.OverrideCamera = 0;
+                blob.FollowDistance = 10f;
+                blob.FollowSharpness = 18f;
+                blob.LookAtSharpness = 15f;
+                blob.CameraVerticalOffset = 2f;
+                blob.FovAtRest = 60f;
+                blob.FovAtMaxSpeed = 60f;
+                blob.EnginePitchMaxSpeed = 30f;
             }
         }
     }

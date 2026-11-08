@@ -1,4 +1,4 @@
-﻿using Unity.Entities;
+using Unity.Entities;
 using Unity.Mathematics;
 using Unity.MegacityMetro.CameraManagement;
 using UnityEngine.UIElements;
@@ -15,12 +15,19 @@ namespace Unity.MegacityMetro.Gameplay
 {
     /// <summary>
     /// System to collect the player input and send it to the player vehicle.
+    /// Mouse deltas are accumulated across the frames that map to one simulation tick so every pixel counts once
+    /// regardless of frame rate; sticks/keys/touch are shaped by the active flight profile.
     /// </summary>
     [WorldSystemFilter(WorldSystemFilterFlags.ClientSimulation)]
     [UpdateInGroup(typeof(GhostInputSystemGroup))]
     public partial class PlayerVehicleInputSystemBase : SystemBase
     {
         private GameInput m_GameInput;
+
+        // Mouse accumulation for the current tick
+        private float2 m_AccumulatedMouseDelta;
+        private float m_AccumulatedMouseTime;
+        private uint m_LastTickIndex = uint.MaxValue;
 
         private bool IsTrackpadTouched => PluginLoader.TouchesCount() > 0;
 
@@ -59,44 +66,67 @@ namespace Unity.MegacityMetro.Gameplay
             var invertVertical = controlSettings.InverseLookVertical ? -1 : 1;
             var accelerationRange = controlSettings.AccelerationRange;
 
+            // Input shaping from the local ship's flight profile (defaults when no ship exists yet)
+            float mouseScale = 1f, stickScale = 1f, touchScale = 1f, stickDeadzone = 0f, stickExponent = 1f;
+            foreach (var (table, profileRef) in SystemAPI.Query<RefRO<FlightProfileTableRef>, RefRO<FlightProfileRef>>().WithAll<GhostOwnerIsLocal>())
+            {
+                var profile = table.ValueRO.GetProfile(profileRef.ValueRO.Index);
+                mouseScale = profile.MouseLookScale;
+                stickScale = profile.StickLookScale;
+                touchScale = profile.TouchLookScale;
+                stickDeadzone = profile.StickDeadzone;
+                stickExponent = profile.StickResponseExponent;
+                break;
+            }
+
 #if UNITY_ANDROID || UNITY_IPHONE || ENABLED_VIRTUAL_JOYSTICK
+            float2 joystick = ShapeStick(MobileControls.Instance.JoystickLeft.Delta, stickDeadzone, stickExponent);
             var input = new PlayerVehicleInput
             {
                 Acceleration = math.clamp(MobileControls.Instance.Speed, accelerationRange.x, accelerationRange.y),
                 LookVelocity = new float2(
-                    MobileControls.Instance.JoystickLeft.Delta.y * invertVertical,
-                    MobileControls.Instance.JoystickLeft.Delta.x * invertHorizontal) * ConstLookVelocityMultiplier,
+                    joystick.y * invertVertical,
+                    joystick.x * invertHorizontal) * ConstLookVelocityMultiplier * touchScale,
                 Shoot = MobileControls.Instance.Shoot,
                 AimAssistSensitivity = controlSettings.AimAssistanceSensitivity,
             };
 #else
             
             var gameplayInputActions = m_GameInput.Gameplay;
+
+            // Reset the mouse accumulator when the simulation tick advances
+            uint tickIndex = CurrentTickIndex();
+            if (tickIndex != m_LastTickIndex)
+            {
+                m_LastTickIndex = tickIndex;
+                m_AccumulatedMouseDelta = float2.zero;
+                m_AccumulatedMouseTime = 0f;
+            }
+            m_AccumulatedMouseDelta += (float2) gameplayInputActions.LookDelta.ReadValue<Vector2>();
+            m_AccumulatedMouseTime += deltaTime;
             
             float2 lookInput = default; 
-            if (math.any(gameplayInputActions.LookDelta.ReadValue<Vector2>()))
-            {
-                if (deltaTime != 0f)
-                {
-                    lookInput = new float2
-                    {
-                        x = -gameplayInputActions.LookDelta.ReadValue<Vector2>().y * invertVertical,
-                        y = gameplayInputActions.LookDelta.ReadValue<Vector2>().x * invertHorizontal,
-                    };
-
-                    float sensitivity = IsTrackpadTouched ? controlSettings.TrackpadSensitivity : 1.0f;
-                    lookInput *= controlSettings.MouseSensitivity * sensitivity;
-                    lookInput /= deltaTime; // convert delta displacement this frame to a velocity
-                }
-            }
-            else
+            if (math.any(m_AccumulatedMouseDelta != float2.zero) && m_AccumulatedMouseTime > 0f)
             {
                 lookInput = new float2
                 {
-                    x = -gameplayInputActions.LookConst.ReadValue<Vector2>().y * invertVertical,
-                    y = gameplayInputActions.LookConst.ReadValue<Vector2>().x * invertHorizontal,
+                    x = -m_AccumulatedMouseDelta.y * invertVertical,
+                    y = m_AccumulatedMouseDelta.x * invertHorizontal,
                 };
-                lookInput *= ConstLookVelocityMultiplier;
+
+                float sensitivity = IsTrackpadTouched ? controlSettings.TrackpadSensitivity : 1.0f;
+                lookInput *= controlSettings.MouseSensitivity * sensitivity * mouseScale;
+                lookInput /= m_AccumulatedMouseTime; // displacement accumulated this tick -> velocity
+            }
+            else
+            {
+                float2 stick = ShapeStick(gameplayInputActions.LookConst.ReadValue<Vector2>(), stickDeadzone, stickExponent);
+                lookInput = new float2
+                {
+                    x = -stick.y * invertVertical,
+                    y = stick.x * invertHorizontal,
+                };
+                lookInput *= ConstLookVelocityMultiplier * stickScale;
             }
             
             var input = new PlayerVehicleInput
@@ -114,6 +144,29 @@ namespace Unity.MegacityMetro.Gameplay
 
             var job = new PlayerVehicleInputJob { CollectedInput = input};
             job.Schedule();
+        }
+
+        /// <summary>
+        /// Index of the simulation tick the current frame's input will be consumed by: the predicted server tick
+        /// in netcode worlds, a fixed-step counter in the local (single-player) world.
+        /// </summary>
+        private uint CurrentTickIndex()
+        {
+            if (SystemAPI.TryGetSingleton<NetworkTime>(out var networkTime) && networkTime.ServerTick.IsValid)
+                return networkTime.ServerTick.TickIndexForValidTick;
+            return (uint) (SystemAPI.Time.ElapsedTime * RateSettings.tickRate);
+        }
+
+        /// <summary>Deadzone + response-exponent shaping for a normalized 2D axis (sticks, key composites, touch).</summary>
+        private static float2 ShapeStick(float2 value, float deadzone, float exponent)
+        {
+            float magnitude = math.length(value);
+            if (magnitude < 1e-5f || magnitude <= deadzone)
+                return float2.zero;
+
+            float normalized = math.saturate((magnitude - deadzone) / math.max(1e-5f, 1f - deadzone));
+            float shaped = exponent == 1f ? normalized : math.pow(normalized, math.max(0.1f, exponent));
+            return value / magnitude * shaped;
         }
     }
 
